@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Gráfico por Estado con Filtro</title>
+  <script src="https://cdn.amcharts.com/lib/5/index.js"></script>
+  <script src="https://cdn.amcharts.com/lib/5/xy.js"></script>
+  <script src="https://cdn.amcharts.com/lib/5/themes/Animated.js"></script>
+
+  <style>
+    #chartdiv {
+      width: 100%;
+      height: 500px;
+      margin-top: 20px;
+    }
+    #filtro {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      margin-top: 10px;
+      gap: 10px;
+      font-family: sans-serif;
+    }
+    select {
+      padding: 5px 10px;
+      font-size: 14px;
+    }
+    #loading {
+      text-align: center;
+      padding: 20px;
+      font-family: sans-serif;
+      color: #666;
+    }
+  </style>
+</head>
+<body>
+
+<h2 style="text-align:center;">PIEZAS ENTREGADAS, EN TRÁNSITO E INCUMPLIDAS</h2>
+<p style="text-align:center; color:gray;">Visualización mensual por estado</p>
+
+<div id="loading">Cargando datos...</div>
+
+<div id="filtro" style="display:none;">
+  <label for="estadoSelect"><strong>Selecciona un estado:</strong></label>
+  <select id="estadoSelect"></select>
+</div>
+
+<div id="chartdiv"></div>
+
+<script>
+// URL del CSV publicado de Google Sheets
+const csvUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vR2XEedlwqjryGwiRXsGYy-V9ryKQVtn21dhWMbmPMjjrhj6RD7H0s7fHwy35nDP6oTKt6llDXjKpl7/pub?gid=0&single=true&output=csv';
+
+// Función para parsear CSV manualmente
+function parseCSV(text) {
+  const lines = text.split('\n').filter(line => line.trim() !== '');
+  const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
+  
+  const data = [];
+  for (let i = 1; i < lines.length; i++) {
+    const values = lines[i].split(',');
+    if (values.length >= headers.length) {
+      const row = {};
+      headers.forEach((header, index) => {
+        row[header] = values[index] ? values[index].trim() : '';
+      });
+      data.push(row);
+    }
+  }
+  return data;
+}
+
+// Cargar CSV usando fetch
+fetch(csvUrl)
+  .then(response => {
+    if (!response.ok) {
+      throw new Error('No se pudo cargar el archivo CSV');
+    }
+    return response.text();
+  })
+  .then(csvText => {
+    // Parsear el CSV
+    const parsedData = parseCSV(csvText);
+    
+    // Ocultar mensaje de carga
+    document.getElementById('loading').style.display = 'none';
+    document.getElementById('filtro').style.display = 'flex';
+    
+    // Procesar datos
+    const dataCompleta = parsedData.map(row => ({
+      estado: row.estado || row.Estado || '',
+      mes: row.mes || row.Mes || '',
+      entregadas: parseFloat(row.entregadas || row.Entregadas || 0),
+      transito: parseFloat(row.transito || row.Transito || row.en_transito || row['en transito'] || 0),
+      validacion: parseFloat(row.validacion || row.Validacion || 0),
+      incumplidas: parseFloat(row.incumplidas || row.Incumplidas || 0)
+    })).filter(row => row.estado && row.mes); // Filtrar filas vacías
+
+    console.log('Datos cargados:', dataCompleta); // Para debugging
+    
+    // Inicializar el gráfico con los datos cargados
+    inicializarGrafico(dataCompleta);
+  })
+  .catch(error => {
+    document.getElementById('loading').innerHTML = 
+      '<p style="color: red;">Error al cargar los datos del CSV.</p>' +
+      '<p style="font-size: 12px;">Verifica que el enlace sea correcto y que la hoja esté publicada.</p>' +
+      '<p style="font-size: 12px;">Error: ' + error.message + '</p>';
+    console.error('Error detallado:', error);
+  });
+
+function inicializarGrafico(dataCompleta) {
+  if (!dataCompleta || dataCompleta.length === 0) {
+    document.getElementById('loading').innerHTML = 
+      '<p style="color: orange;">No se encontraron datos en el CSV.</p>';
+    return;
+  }
+
+  am5.ready(function() {
+
+    // --- 1. Crear root y gráfico ---
+    var root = am5.Root.new("chartdiv");
+    root.setThemes([am5themes_Animated.new(root)]);
+
+    var chart = root.container.children.push(
+      am5xy.XYChart.new(root, {
+        layout: root.verticalLayout,
+        panX: false,
+        panY: false
+      })
+    );
+
+    // --- 2. Ejes ---
+    var xAxis = chart.xAxes.push(
+      am5xy.CategoryAxis.new(root, {
+        categoryField: "mes",
+        renderer: am5xy.AxisRendererX.new(root, {
+          cellStartLocation: 0.1,
+          cellEndLocation: 0.9
+        })
+      })
+    );
+
+    var yAxis = chart.yAxes.push(
+      am5xy.ValueAxis.new(root, {
+        min: 0,
+        maxPrecision: 0,
+        renderer: am5xy.AxisRendererY.new(root, {})
+      })
+    );
+
+    // --- 3. Crear series ---
+    function makeSeries(name, field, color) {
+      var series = chart.series.push(
+        am5xy.ColumnSeries.new(root, {
+          name: name,
+          xAxis: xAxis,
+          yAxis: yAxis,
+          valueYField: field,
+          categoryXField: "mes",
+          stacked: true
+        })
+      );
+
+      series.columns.template.setAll({
+        fill: color,
+        stroke: color,
+        width: am5.percent(80)
+      });
+
+      series.set("tooltip", am5.Tooltip.new(root, {
+        labelText: "{name}: {valueY.formatNumber('#,###')}"
+      }));
+
+      return series;
+    }
+
+    var s1 = makeSeries("Piezas entregadas", "entregadas", am5.color(0x184d47));
+    var s2 = makeSeries("Piezas en tránsito", "transito", am5.color(0xc9a54e));
+    var s3 = makeSeries("Validación de entrega", "validacion", am5.color(0xd9822b));
+    var s4 = makeSeries("Piezas incumplidas", "incumplidas", am5.color(0x701d2f));
+
+    // --- 4. Cursor con tooltips simultáneos ---
+    var cursor = chart.set("cursor", am5xy.XYCursor.new(root, {
+      behavior: "none",
+      xAxis: xAxis
+    }));
+    cursor.lineY.set("visible", false);
+
+    cursor.events.on("positionchanged", function() {
+      var position = cursor.getPrivate("positionX");
+      var category = xAxis.get("positionToCategory")(position);
+      if (!category) return;
+      chart.series.each(function(series) {
+        var dataItem = series.dataItems.find(di => di.get("categoryX") === category);
+        if (dataItem) {
+          series.showDataItemTooltip(dataItem);
+        } else {
+          series.hideTooltip();
+        }
+      });
+    });
+
+    cursor.events.on("cursorhidden", function() {
+      chart.series.each(function(series) {
+        series.hideTooltip();
+      });
+    });
+
+    // --- 5. Leyenda ---
+    var legend = chart.children.push(am5.Legend.new(root, {
+      centerX: am5.p50,
+      x: am5.p50
+    }));
+    legend.data.setAll(chart.series.values);
+
+    // --- 6. Poblamos el select ---
+    const estadoSelect = document.getElementById("estadoSelect");
+    const estados = [...new Set(dataCompleta.map(d => d.estado))].filter(e => e);
+    
+    if (estados.length === 0) {
+      document.getElementById('loading').innerHTML = 
+        '<p style="color: orange;">No se encontraron estados en los datos.</p>';
+      return;
+    }
+    
+    estados.forEach(e => {
+      const option = document.createElement("option");
+      option.value = e;
+      option.textContent = e;
+      estadoSelect.appendChild(option);
+    });
+
+    // --- 7. Función de filtrado ---
+    function filtrarPorEstado(estado) {
+      const datosFiltrados = dataCompleta.filter(d => d.estado === estado);
+      xAxis.data.setAll(datosFiltrados);
+      s1.data.setAll(datosFiltrados);
+      s2.data.setAll(datosFiltrados);
+      s3.data.setAll(datosFiltrados);
+      s4.data.setAll(datosFiltrados);
+    }
+
+    // --- 8. Evento del select ---
+    estadoSelect.addEventListener("change", (e) => {
+      filtrarPorEstado(e.target.value);
+    });
+
+    // Inicializamos con el primer estado
+    filtrarPorEstado(estados[0]);
+
+  });
+}
+</script>
+
+</body>
+</html>
